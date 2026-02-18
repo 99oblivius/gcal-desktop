@@ -98,7 +98,7 @@ def configure_webview_settings(webview):
     settings.set_user_agent(USER_AGENT)
     settings.set_enable_javascript(True)
     settings.set_hardware_acceleration_policy(
-        WebKit.HardwareAccelerationPolicy.ALWAYS
+        WebKit.HardwareAccelerationPolicy.ON_DEMAND
     )
     settings.set_enable_smooth_scrolling(True)
     settings.set_enable_developer_extras(False)
@@ -119,8 +119,10 @@ def create_popup_webview(main_webview, navigation_action, network_session):
         default_height=700,
     )
 
-    popup_webview = WebKit.WebView(
+    # Use related_view so the popup shares the same process and session
+    popup_webview = WebKit.WebView.new(
         network_session=network_session,
+        related_view=main_webview,
     )
     configure_webview_settings(popup_webview)
 
@@ -134,9 +136,24 @@ def create_popup_webview(main_webview, navigation_action, network_session):
     )
 
     popup_window.set_child(popup_webview)
+
+    # Realize the window before returning so the webview has a surface
     popup_window.present()
 
     return popup_webview
+
+
+def _on_create_safe(main_webview, navigation_action, network_session):
+    """Wrapper around popup creation that handles errors gracefully."""
+    try:
+        return create_popup_webview(main_webview, navigation_action, network_session)
+    except Exception as exc:
+        print(f"Warning: failed to create popup window: {exc}", file=sys.stderr)
+        # Fall back: load the popup URL in the main webview instead
+        uri = navigation_action.get_request().get_uri()
+        if uri:
+            main_webview.load_uri(uri)
+        return None
 
 
 class GcalDesktopApp(Gtk.Application):
@@ -199,7 +216,7 @@ class GcalDesktopApp(Gtk.Application):
         network_session = self.network_session
         webview.connect(
             "create",
-            lambda wv, nav: create_popup_webview(wv, nav, network_session),
+            lambda wv, nav: _on_create_safe(wv, nav, network_session),
         )
 
         window.set_child(webview)
