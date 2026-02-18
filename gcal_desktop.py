@@ -6,22 +6,100 @@ sitting above the wallpaper but below normal windows. Persists
 cookies so you stay logged in across restarts.
 """
 
-from ctypes import CDLL
-
-# gtk4-layer-shell MUST be loaded before any gi imports
-CDLL("libgtk4-layer-shell.so")
-
 import argparse
 import os
+import shutil
 import sys
 
-import gi
 
+def _check_dependencies():
+    """Verify runtime dependencies and print helpful errors if missing."""
+    errors = []
+
+    # Check libgtk4-layer-shell.so
+    from ctypes import CDLL, util
+    lib = util.find_library("gtk4-layer-shell")
+    if lib:
+        CDLL(lib)
+    else:
+        try:
+            CDLL("libgtk4-layer-shell.so")
+        except OSError:
+            errors.append(
+                "libgtk4-layer-shell is not installed.\n"
+                "  Arch:   sudo pacman -S gtk4-layer-shell\n"
+                "  Ubuntu: sudo apt install libgtk4-layer-shell0"
+            )
+
+    # Check Python GObject introspection
+    try:
+        import gi
+    except ImportError:
+        errors.append(
+            "PyGObject (python-gi) is not installed.\n"
+            "  Arch:   sudo pacman -S python-gobject\n"
+            "  Ubuntu: sudo apt install python3-gi"
+        )
+        _die(errors)
+        return  # unreachable
+
+    # Check GI typelibs
+    gi_deps = {
+        ("Gdk", "4.0"): ("gtk4", "gir1.2-gtk-4.0"),
+        ("Gtk", "4.0"): ("gtk4", "gir1.2-gtk-4.0"),
+        ("WebKit", "6.0"): ("webkitgtk-6.0", "gir1.2-webkit-6.0"),
+        ("Gtk4LayerShell", "1.0"): ("gtk4-layer-shell", "gir1.2-gtk4layershell-1.0"),
+    }
+    for (namespace, version), (arch_pkg, ubuntu_pkg) in gi_deps.items():
+        try:
+            gi.require_version(namespace, version)
+        except ValueError:
+            errors.append(
+                f"GObject introspection data for {namespace}-{version} not found.\n"
+                f"  Arch:   sudo pacman -S {arch_pkg}\n"
+                f"  Ubuntu: sudo apt install {ubuntu_pkg}"
+            )
+
+    # Check GStreamer (needed by WebKitGTK for Google Calendar)
+    gst_check = shutil.which("gst-inspect-1.0")
+    if gst_check:
+        import subprocess
+        result = subprocess.run(
+            ["gst-inspect-1.0", "autoaudiosink"],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            errors.append(
+                "GStreamer audio plugin 'autoaudiosink' not found.\n"
+                "  Arch:   sudo pacman -S gst-plugins-base gst-plugins-good\n"
+                "  Ubuntu: sudo apt install gstreamer1.0-plugins-base gstreamer1.0-plugins-good"
+            )
+
+    if errors:
+        _die(errors)
+
+
+def _die(errors):
+    """Print dependency errors and exit."""
+    print("gcal-desktop: missing dependencies\n", file=sys.stderr)
+    for err in errors:
+        print(f"  * {err}\n", file=sys.stderr)
+    sys.exit(1)
+
+
+_check_dependencies()
+
+# --- Safe to import GTK stack now ---
+from ctypes import CDLL
+CDLL("libgtk4-layer-shell.so")
+
+import gi
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("WebKit", "6.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gdk, GLib, Gtk, WebKit
+from gi.repository import Gdk, Gio, Gtk, WebKit
 from gi.repository import Gtk4LayerShell as LayerShell
 
 APP_ID = "com.github.gcal-desktop"
@@ -36,6 +114,7 @@ LAYER_MAP = {
     "background": LayerShell.Layer.BACKGROUND,
     "bottom": LayerShell.Layer.BOTTOM,
     "top": LayerShell.Layer.TOP,
+    "overlay": LayerShell.Layer.OVERLAY,
 }
 
 
@@ -52,7 +131,7 @@ def parse_args():
     )
     parser.add_argument(
         "--layer",
-        choices=["background", "bottom", "top"],
+        choices=["background", "bottom", "top", "overlay"],
         default="bottom",
         help="Layer shell layer (default: bottom)",
     )
@@ -61,6 +140,11 @@ def parse_args():
         type=int,
         default=None,
         help="Monitor index to display on (default: primary/all)",
+    )
+    parser.add_argument(
+        "--no-layer-shell",
+        action="store_true",
+        help="Run as a regular window instead of a desktop layer",
     )
     parser.add_argument(
         "--service-install",
@@ -89,6 +173,12 @@ def build_network_session():
     cookie_manager = network_session.get_cookie_manager()
     cookie_manager.set_accept_policy(WebKit.CookieAcceptPolicy.ALWAYS)
 
+    # Persist cookies to disk so login survives restarts
+    cookie_file = os.path.join(data_dir, "cookies.sqlite")
+    cookie_manager.set_persistent_storage(
+        cookie_file, WebKit.CookiePersistentStorage.SQLITE
+    )
+
     return network_session
 
 
@@ -96,64 +186,59 @@ def configure_webview_settings(webview):
     """Apply common settings to a WebView instance."""
     settings = webview.get_settings()
     settings.set_user_agent(USER_AGENT)
-    settings.set_enable_javascript(True)
-    settings.set_hardware_acceleration_policy(
-        WebKit.HardwareAccelerationPolicy.ON_DEMAND
+
+
+def _on_tls_error(webview, uri, certificate, errors, network_session):
+    """Accept TLS certificates and retry the load."""
+    from urllib.parse import urlparse
+    host = urlparse(uri).hostname
+    if host:
+        network_session.allow_tls_certificate_for_host(certificate, host)
+        webview.load_uri(uri)
+    return True
+
+
+def _on_context_menu(webview, context_menu, hit_test, _user_data):
+    """Add custom items to the WebView's right-click context menu."""
+    # Separator before our items
+    context_menu.append(WebKit.ContextMenuItem.new_separator())
+
+    # Reload
+    reload_item = WebKit.ContextMenuItem.new_from_stock_action(
+        WebKit.ContextMenuAction.RELOAD
     )
-    settings.set_enable_smooth_scrolling(True)
-    settings.set_enable_developer_extras(False)
+    context_menu.append(reload_item)
+
+    # Quit
+    app = webview.get_root().get_application()
+    quit_action = Gio.SimpleAction.new("quit-gcal", None)
+    quit_action.connect("activate", lambda *_: app.quit())
+    app.add_action(quit_action)
+    quit_item = WebKit.ContextMenuItem.new_from_gaction(
+        quit_action, "Quit gcal-desktop", None
+    )
+    context_menu.append(quit_item)
+
+    return False  # show the menu
 
 
-def create_popup_webview(main_webview, navigation_action, network_session):
-    """Handle popup windows for Google OAuth login flow.
+def _on_decide_policy(webview, decision, decision_type):
+    """Handle navigation policy decisions.
 
-    Google OAuth opens popups during login. We create a regular GTK
-    window (not a layer-shell window) so the user can interact with
-    the login form normally.
-
-    Returns the new WebView that WebKit will load the popup into.
+    When a page tries to open a new window (e.g., Google OAuth popup),
+    we intercept it and load the URL in the main webview instead.
+    This avoids the WebKit WindowFeatures crash on some versions.
     """
-    popup_window = Gtk.Window(
-        title="Google Sign-In",
-        default_width=500,
-        default_height=700,
-    )
-
-    # Use related_view so the popup shares the same process and session
-    popup_webview = WebKit.WebView.new(
-        network_session=network_session,
-        related_view=main_webview,
-    )
-    configure_webview_settings(popup_webview)
-
-    # Close the popup window when the webview signals it should close
-    popup_webview.connect("close", lambda wv: popup_window.close())
-
-    # Also update window title to match page title
-    popup_webview.connect(
-        "notify::title",
-        lambda wv, _param: popup_window.set_title(wv.get_title() or "Google Sign-In"),
-    )
-
-    popup_window.set_child(popup_webview)
-
-    # Realize the window before returning so the webview has a surface
-    popup_window.present()
-
-    return popup_webview
-
-
-def _on_create_safe(main_webview, navigation_action, network_session):
-    """Wrapper around popup creation that handles errors gracefully."""
-    try:
-        return create_popup_webview(main_webview, navigation_action, network_session)
-    except Exception as exc:
-        print(f"Warning: failed to create popup window: {exc}", file=sys.stderr)
-        # Fall back: load the popup URL in the main webview instead
-        uri = navigation_action.get_request().get_uri()
+    if decision_type == WebKit.PolicyDecisionType.NEW_WINDOW_ACTION:
+        nav_action = decision.get_navigation_action()
+        request = nav_action.get_request()
+        uri = request.get_uri()
         if uri:
-            main_webview.load_uri(uri)
-        return None
+            decision.ignore()
+            webview.load_uri(uri)
+            return True
+    decision.use()
+    return True
 
 
 class GcalDesktopApp(Gtk.Application):
@@ -170,59 +255,59 @@ class GcalDesktopApp(Gtk.Application):
 
         window = Gtk.ApplicationWindow(application=self)
 
-        # --- Layer shell configuration ---
-        LayerShell.init_for_window(window)
-        LayerShell.set_layer(window, LAYER_MAP[self.args.layer])
+        if not self.args.no_layer_shell:
+            LayerShell.init_for_window(window)
+            LayerShell.set_layer(window, LAYER_MAP[self.args.layer])
 
-        # Anchor all four edges so the window fills the screen
-        LayerShell.set_anchor(window, LayerShell.Edge.TOP, True)
-        LayerShell.set_anchor(window, LayerShell.Edge.BOTTOM, True)
-        LayerShell.set_anchor(window, LayerShell.Edge.LEFT, True)
-        LayerShell.set_anchor(window, LayerShell.Edge.RIGHT, True)
+            LayerShell.set_anchor(window, LayerShell.Edge.TOP, True)
+            LayerShell.set_anchor(window, LayerShell.Edge.BOTTOM, True)
+            LayerShell.set_anchor(window, LayerShell.Edge.LEFT, True)
+            LayerShell.set_anchor(window, LayerShell.Edge.RIGHT, True)
 
-        # -1 means do not reserve space; overlap everything on this layer
-        LayerShell.set_exclusive_zone(window, -1)
+            LayerShell.set_exclusive_zone(window, -1)
 
-        # Allow keyboard focus when the user clicks
-        LayerShell.set_keyboard_mode(
-            window, LayerShell.KeyboardMode.ON_DEMAND
-        )
+            LayerShell.set_keyboard_mode(
+                window, LayerShell.KeyboardMode.ON_DEMAND
+            )
 
-        # Pin to a specific monitor if requested
-        if self.args.monitor is not None:
-            display = Gdk.Display.get_default()
-            if display is not None:
-                monitors = display.get_monitors()
-                if 0 <= self.args.monitor < monitors.get_n_items():
-                    monitor = monitors.get_item(self.args.monitor)
-                    LayerShell.set_monitor(window, monitor)
-                else:
-                    print(
-                        f"Warning: monitor index {self.args.monitor} out of "
-                        f"range (0-{monitors.get_n_items() - 1}). "
-                        "Using default.",
-                        file=sys.stderr,
-                    )
+            if self.args.monitor is not None:
+                display = Gdk.Display.get_default()
+                if display is not None:
+                    monitors = display.get_monitors()
+                    if 0 <= self.args.monitor < monitors.get_n_items():
+                        monitor = monitors.get_item(self.args.monitor)
+                        LayerShell.set_monitor(window, monitor)
+                    else:
+                        print(
+                            f"Warning: monitor index {self.args.monitor} out of "
+                            f"range (0-{monitors.get_n_items() - 1}). "
+                            "Using default.",
+                            file=sys.stderr,
+                        )
+        else:
+            window.set_default_size(1280, 900)
 
         # --- WebView ---
         webview = WebKit.WebView(network_session=self.network_session)
         configure_webview_settings(webview)
 
-        # Expand to fill the window
         webview.set_hexpand(True)
         webview.set_vexpand(True)
 
-        # Handle popups (Google OAuth login windows)
+        webview.connect("decide-policy", _on_decide_policy)
+        webview.connect("context-menu", _on_context_menu, None)
+
         network_session = self.network_session
         webview.connect(
-            "create",
-            lambda wv, nav: _on_create_safe(wv, nav, network_session),
+            "load-failed-with-tls-errors",
+            lambda wv, uri, cert, errors: _on_tls_error(
+                wv, uri, cert, errors, network_session
+            ),
         )
 
         window.set_child(webview)
         window.present()
 
-        # Load the target URL
         webview.load_uri(self.args.url)
 
 
@@ -270,7 +355,6 @@ def _service_uninstall():
 
     service_path = os.path.expanduser("~/.config/systemd/user/gcal-desktop.service")
 
-    # Best-effort stop and disable
     subprocess.run(
         ["systemctl", "--user", "disable", "--now", "gcal-desktop.service"],
         stderr=subprocess.DEVNULL,
@@ -296,7 +380,7 @@ def main():
         return _service_uninstall()
 
     app = GcalDesktopApp(args)
-    return app.run(sys.argv[:1])  # pass only argv[0] to GTK
+    return app.run(sys.argv[:1])
 
 
 if __name__ == "__main__":
