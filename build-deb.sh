@@ -9,7 +9,7 @@ PKG_ARCH="all"
 PKG_MAINTAINER="gcal-desktop contributors <noreply@github.com>"
 PKG_DESCRIPTION="Google Calendar rendered as your desktop wallpaper on Wayland"
 PKG_HOMEPAGE="https://github.com/99oblivius/gcal-desktop"
-PKG_DEPENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-webkit-6.0, gir1.2-gtk4layershell-1.0, libgtk4-layer-shell0"
+PKG_DEPENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-webkit-6.0, gir1.2-gtk4layershell-1.0, libgtk4-layer-shell0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good"
 
 DEB_FILENAME="${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.deb"
 BUILD_DIR="$(mktemp -d)"

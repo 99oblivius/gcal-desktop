@@ -11,6 +11,8 @@ depends=(
     'gtk4'
     'webkitgtk-6.0'
     'gtk4-layer-shell'
+    'gst-plugins-base'
+    'gst-plugins-good'
 )
 source=("git+https://github.com/99oblivius/gcal-desktop.git")
 sha256sums=('SKIP')
