@@ -48,3 +48,10 @@ coverage.xml
 # OS-generated files
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+*.deb
+*.pkg.tar.zst
+*.pkg.tar.xz
+pkg/
+src/
