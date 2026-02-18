@@ -62,6 +62,16 @@ def parse_args():
         default=None,
         help="Monitor index to display on (default: primary/all)",
     )
+    parser.add_argument(
+        "--service-install",
+        action="store_true",
+        help="Install and enable the systemd user service, then exit",
+    )
+    parser.add_argument(
+        "--service-uninstall",
+        action="store_true",
+        help="Disable and remove the systemd user service, then exit",
+    )
     # Separate our args from GTK args so Gtk.Application doesn't choke
     args, _remaining = parser.parse_known_args()
     return args
@@ -199,8 +209,75 @@ class GcalDesktopApp(Gtk.Application):
         webview.load_uri(self.args.url)
 
 
+def _find_service_source():
+    """Locate the .service file shipped alongside this script."""
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcal-desktop.service"),
+        "/usr/lib/systemd/user/gcal-desktop.service",
+        "/usr/local/lib/systemd/user/gcal-desktop.service",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _service_install():
+    """Install and enable the systemd user service."""
+    import shutil
+    import subprocess
+
+    service_dir = os.path.expanduser("~/.config/systemd/user")
+    service_dest = os.path.join(service_dir, "gcal-desktop.service")
+
+    source = _find_service_source()
+    if source is None:
+        print("Error: cannot find gcal-desktop.service file.", file=sys.stderr)
+        print("Make sure it exists next to gcal_desktop.py or in /usr/lib/systemd/user/.", file=sys.stderr)
+        return 1
+
+    os.makedirs(service_dir, exist_ok=True)
+    shutil.copy2(source, service_dest)
+    print(f"Installed service file to {service_dest}")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "gcal-desktop.service"], check=True)
+    print("Service enabled. Start it with:")
+    print("  systemctl --user start gcal-desktop.service")
+    return 0
+
+
+def _service_uninstall():
+    """Disable and remove the systemd user service."""
+    import subprocess
+
+    service_path = os.path.expanduser("~/.config/systemd/user/gcal-desktop.service")
+
+    # Best-effort stop and disable
+    subprocess.run(
+        ["systemctl", "--user", "disable", "--now", "gcal-desktop.service"],
+        stderr=subprocess.DEVNULL,
+    )
+
+    if os.path.isfile(service_path):
+        os.remove(service_path)
+        print(f"Removed {service_path}")
+    else:
+        print(f"Service file not found at {service_path}, nothing to remove.")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    print("Service disabled and removed.")
+    return 0
+
+
 def main():
     args = parse_args()
+
+    if args.service_install:
+        return _service_install()
+    if args.service_uninstall:
+        return _service_uninstall()
+
     app = GcalDesktopApp(args)
     return app.run(sys.argv[:1])  # pass only argv[0] to GTK
 

@@ -1,0 +1,29 @@
+# gcal-desktop systemd user service
+# Requires an active graphical session (Wayland or X11 fallback).
+# The graphical-session.target ensures session environment variables
+# like WAYLAND_DISPLAY and DISPLAY are available.
+#
+# For custom environment overrides, create:
+#   ~/.config/gcal-desktop/env
+# with KEY=VALUE lines (e.g., WEBKIT_DISABLE_COMPOSITING_MODE=1).
+
+[Unit]
+Description=Google Calendar Desktop Wallpaper
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gcal-desktop
+Restart=on-failure
+RestartSec=5
+
+# Import the graphical session environment so Wayland/X11 vars are present
+# (WAYLAND_DISPLAY, DISPLAY, XDG_RUNTIME_DIR, etc.)
+ImportEnvironment=WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS
+
+# Optional user overrides
+EnvironmentFile=-%h/.config/gcal-desktop/env
+
+[Install]
+WantedBy=graphical-session.target

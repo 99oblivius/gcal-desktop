@@ -9,11 +9,12 @@ Google Calendar rendered as your desktop wallpaper on KDE Plasma 6 (Wayland).
 ## Features
 
 - Renders Google Calendar directly on your desktop background using an embedded WebKit browser
-- Sits behind all windows on the desktop layer — always visible, never in the way
+- Sits behind all windows on the desktop layer -- always visible, never in the way
 - Survives workspace switches and stays anchored to the correct monitor
-- Starts automatically at login via a freedesktop autostart entry
+- Starts automatically at login via systemd user service or freedesktop autostart entry
 - Configurable calendar URL, Wayland layer, and target monitor via CLI flags
-- No Electron, no extra runtime — just GTK4 + WebKitGTK + gtk4-layer-shell
+- Distributable as a `.deb` package for easy sharing
+- No Electron, no extra runtime -- just GTK4 + WebKitGTK + gtk4-layer-shell
 
 ---
 
@@ -42,7 +43,23 @@ sudo apt install \
 
 ## Installation
 
-### 1. Install dependencies
+### Option A: Install from .deb package
+
+If someone has shared a `.deb` file with you:
+
+```bash
+sudo apt install ./gcal-desktop_1.0.0_all.deb
+```
+
+This installs the binary, desktop entry, and systemd service file system-wide. After installation, enable the service:
+
+```bash
+systemctl --user enable --now gcal-desktop.service
+```
+
+### Option B: Install from source
+
+#### 1. Install dependencies
 
 ```bash
 sudo apt install \
@@ -53,14 +70,14 @@ sudo apt install \
     libgtk4-layer-shell0
 ```
 
-### 2. Clone the repository
+#### 2. Clone the repository
 
 ```bash
 git clone https://github.com/99oblivius/gcal-desktop.git
 cd gcal-desktop
 ```
 
-### 3. Run the installer
+#### 3. Run the installer
 
 ```bash
 bash install.sh
@@ -68,14 +85,91 @@ bash install.sh
 
 The installer will:
 - Copy `gcal_desktop.py` to `/usr/local/bin/gcal-desktop` (with executable permissions)
-- Copy `gcal-desktop.desktop` to `~/.config/autostart/` so the app launches automatically at login
+- Install the systemd user service to `~/.config/systemd/user/`
+- Ask you to choose between systemd service or XDG autostart
 
-### Manual installation (alternative)
+#### Manual installation (alternative)
 
 ```bash
 sudo install -m 755 gcal_desktop.py /usr/local/bin/gcal-desktop
+mkdir -p ~/.config/systemd/user
+cp gcal-desktop.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now gcal-desktop.service
+```
+
+---
+
+## Building the .deb package
+
+To build a distributable `.deb` package from the source tree:
+
+```bash
+bash build-deb.sh
+```
+
+This creates `gcal-desktop_1.0.0_all.deb` in the project root. The package includes:
+
+- `/usr/bin/gcal-desktop` -- the main executable
+- `/usr/share/applications/gcal-desktop.desktop` -- desktop entry
+- `/usr/lib/systemd/user/gcal-desktop.service` -- systemd user service
+
+Requirements for building: `dpkg-deb` (available on any Debian/Ubuntu system).
+
+---
+
+## Running: systemd service vs. autostart
+
+gcal-desktop supports two methods for starting automatically at login.
+
+### systemd user service (recommended)
+
+The systemd approach provides automatic restart on failure, centralized logging, and clean start/stop control.
+
+```bash
+# Enable and start
+systemctl --user enable --now gcal-desktop.service
+
+# Or via the built-in CLI flag
+gcal-desktop --service-install
+```
+
+### XDG autostart (.desktop entry)
+
+The traditional method. Your desktop environment launches the app at login. No automatic restart if it crashes.
+
+```bash
 mkdir -p ~/.config/autostart
 cp gcal-desktop.desktop ~/.config/autostart/
+```
+
+### Controlling the systemd service
+
+```bash
+# Check status
+systemctl --user status gcal-desktop
+
+# Restart
+systemctl --user restart gcal-desktop
+
+# Stop
+systemctl --user stop gcal-desktop
+
+# View logs (follow mode)
+journalctl --user -u gcal-desktop -f
+
+# View recent logs
+journalctl --user -u gcal-desktop --since "1 hour ago"
+```
+
+### Custom environment variables
+
+If you need to set environment variables for the service (for example, to disable GPU compositing), create the file `~/.config/gcal-desktop/env`:
+
+```bash
+mkdir -p ~/.config/gcal-desktop
+echo "WEBKIT_DISABLE_COMPOSITING_MODE=1" >> ~/.config/gcal-desktop/env
+systemctl --user restart gcal-desktop
 ```
 
 ---
@@ -84,6 +178,7 @@ cp gcal-desktop.desktop ~/.config/autostart/
 
 ```
 gcal-desktop [--url URL] [--layer LAYER] [--monitor N]
+             [--service-install] [--service-uninstall]
 ```
 
 | Argument | Default | Description |
@@ -91,6 +186,8 @@ gcal-desktop [--url URL] [--layer LAYER] [--monitor N]
 | `--url URL` | Google Calendar web app URL | Full URL to load in the embedded browser |
 | `--layer LAYER` | `bottom` | Wayland layer to place the window on (`background`, `bottom`, `top`) |
 | `--monitor N` | primary | Zero-based index of the monitor to display on |
+| `--service-install` | | Install and enable the systemd user service, then exit |
+| `--service-uninstall` | | Disable and remove the systemd user service, then exit |
 
 ### Examples
 
@@ -103,15 +200,39 @@ gcal-desktop --url "https://calendar.google.com/calendar/r/week"
 
 # Place on a second monitor, on the bottom layer
 gcal-desktop --monitor 1 --layer bottom
+
+# Install the systemd service from the command line
+gcal-desktop --service-install
+
+# Remove the systemd service
+gcal-desktop --service-uninstall
 ```
 
-After installation the app is registered as an autostart entry and will launch
-automatically with your next Plasma session. To start it immediately without
-rebooting:
+---
+
+## Uninstalling
+
+### If installed from .deb
 
 ```bash
-gcal-desktop &
+sudo apt remove gcal-desktop
 ```
+
+The package's pre-removal script automatically stops the service and removes the autostart entry.
+
+### If installed from source
+
+```bash
+bash install.sh --uninstall
+```
+
+This will:
+- Stop and disable the systemd user service (if active)
+- Remove the service file from `~/.config/systemd/user/`
+- Remove the autostart desktop entry (if present)
+- Remove `/usr/local/bin/gcal-desktop`
+
+User data in `~/.local/share/gcal-desktop` and `~/.cache/gcal-desktop` is preserved. Delete those directories manually for a complete cleanup.
 
 ---
 
@@ -119,12 +240,12 @@ gcal-desktop &
 
 `gcal-desktop` uses two libraries to achieve the wallpaper effect:
 
-1. **gtk4-layer-shell** — implements the `wlr-layer-shell` Wayland protocol,
+1. **gtk4-layer-shell** -- implements the `wlr-layer-shell` Wayland protocol,
    which lets a GTK4 window be placed on a named compositor layer (such as
    `background`) rather than in the normal window stack. KDE KWin on Wayland
    supports this protocol, so the window sits behind every other surface.
 
-2. **WebKitGTK** — an embeddable web engine (the same engine used by GNOME
+2. **WebKitGTK** -- an embeddable web engine (the same engine used by GNOME
    Web / Epiphany) wrapped in a GTK4 widget. It loads Google Calendar's full
    web application, giving you a complete, interactive calendar view including
    sign-in, event creation, and all calendar views.
@@ -155,7 +276,7 @@ click-through-capable calendar that lives at the wallpaper level.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for the full text.
+MIT -- see [LICENSE](LICENSE) for the full text.
 
 ---
 
