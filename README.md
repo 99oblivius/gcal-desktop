@@ -57,7 +57,16 @@ This installs the binary, desktop entry, and systemd service file system-wide. A
 systemctl --user enable --now gcal-desktop.service
 ```
 
-### Option B: Install from source
+### Option B: Install from PKGBUILD (Arch Linux)
+
+```bash
+git clone https://github.com/99oblivius/gcal-desktop.git
+cd gcal-desktop
+makepkg -si
+systemctl --user enable --now gcal-desktop.service
+```
+
+### Option C: Install from source
 
 #### 1. Install dependencies
 
@@ -178,14 +187,16 @@ systemctl --user restart gcal-desktop
 
 ```
 gcal-desktop [--url URL] [--layer LAYER] [--monitor N]
+             [--no-layer-shell]
              [--service-install] [--service-uninstall]
 ```
 
 | Argument | Default | Description |
 |---|---|---|
 | `--url URL` | Google Calendar web app URL | Full URL to load in the embedded browser |
-| `--layer LAYER` | `bottom` | Wayland layer to place the window on (`background`, `bottom`, `top`) |
+| `--layer LAYER` | `bottom` | Wayland layer (`background`, `bottom`, `top`, `overlay`) |
 | `--monitor N` | primary | Zero-based index of the monitor to display on |
+| `--no-layer-shell` | | Run as a regular window instead of a desktop layer |
 | `--service-install` | | Install and enable the systemd user service, then exit |
 | `--service-uninstall` | | Disable and remove the systemd user service, then exit |
 
@@ -268,6 +279,10 @@ click-through-capable calendar that lives at the wallpaper level.
   Because the WebKit view is a real browser with persistent storage, logging in
   once is usually sufficient, but Google's session policies may force
   periodic re-login.
+- **Google Calendar interaction.** Some WebKitGTK versions have a bug where
+  Google Calendar's pointer events stop working after the page finishes loading.
+  Ensure GStreamer plugins are installed (`gst-plugins-base`, `gst-plugins-good`
+  on Arch; `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good` on Ubuntu).
 - **Hardware acceleration.** WebKit GPU acceleration depends on your graphics
   driver and Mesa version. If you experience rendering glitches, try setting
   the environment variable `WEBKIT_DISABLE_COMPOSITING_MODE=1`.
