@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=GCal Desktop
+Comment=Google Calendar as your desktop wallpaper
+Exec=gcal-desktop
+Icon=view-calendar
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+StartupNotify=false
+Terminal=false
